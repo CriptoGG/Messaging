@@ -178,12 +178,37 @@
             border-radius: 5px;
             font-size: 0.9em;
         }
+        .profile-container {
+            background-color: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .profile-field {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        .profile-field label {
+            min-width: 120px;
+        }
     </style>
 </head>
 <body>
     <h1>Local Server E2E Encrypted Messaging</h1>
     
     <div class="container">
+        <div class="profile-container">
+            <h2>User Profile</h2>
+            <div class="profile-field">
+                <label for="display-name">Your Display Name:</label>
+                <input type="text" id="display-name" placeholder="Enter your name" value="Anonymous">
+                <button id="save-name">Save</button>
+            </div>
+        </div>
+
         <div class="connection-panel">
             <h2>Connection Settings</h2>
             <div class="tabs">
@@ -291,6 +316,8 @@
         const serverInfo = document.getElementById('server-info');
         const serverIpDisplay = document.getElementById('server-ip');
         const serverPortDisplay = document.getElementById('server-port-display');
+        const displayNameInput = document.getElementById('display-name');
+        const saveNameBtn = document.getElementById('save-name');
 
         // Connection variables
         let server = null;
@@ -298,11 +325,30 @@
         let isServer = true;
         let localMessages = [];
         let connectedClients = new Set();
+        let displayName = "Anonymous";
 
-        // Initialize local storage for messages
+        // Initialize local storage for messages and user profile
         if (localStorage.getItem('encrypted_messages')) {
             localMessages = JSON.parse(localStorage.getItem('encrypted_messages'));
         }
+        
+        if (localStorage.getItem('user_display_name')) {
+            displayName = localStorage.getItem('user_display_name');
+            displayNameInput.value = displayName;
+        }
+
+        // Save display name
+        saveNameBtn.addEventListener('click', () => {
+            const newName = displayNameInput.value.trim();
+            if (newName) {
+                displayName = newName;
+                localStorage.setItem('user_display_name', displayName);
+                alert(`Your display name has been set to: ${displayName}`);
+            } else {
+                alert('Please enter a valid display name');
+                displayNameInput.value = displayName;
+            }
+        });
         
         // Get local IP addresses
         async function getLocalIPs() {
@@ -636,7 +682,8 @@
                 }
                 
                 const messageObj = {
-                    sender: 'Server',
+                    sender: displayName,
+                    role: 'Server',
                     encryptedContent: encryptedMessage,
                     timestamp: Date.now()
                 };
@@ -646,7 +693,7 @@
                 
                 // Store message locally for the sender
                 localMessages.push({
-                    sender: 'You',
+                    sender: displayName,
                     content: message,
                     timestamp: messageObj.timestamp,
                     sent: true
@@ -669,7 +716,8 @@
                 }
                 
                 const messageObj = {
-                    sender: 'Client',
+                    sender: displayName,
+                    role: 'Client',
                     encryptedContent: encryptedMessage,
                     timestamp: Date.now()
                 };
@@ -678,7 +726,7 @@
                 
                 // Store message locally for the sender
                 localMessages.push({
-                    sender: 'You',
+                    sender: displayName,
                     content: message,
                     timestamp: messageObj.timestamp,
                     sent: true
@@ -694,7 +742,7 @@
             const decryptedContent = decryptMessage(messageObj.encryptedContent, myKeyInput.value);
             
             localMessages.push({
-                sender: messageObj.sender,
+                sender: messageObj.sender || (messageObj.role || 'Unknown'),
                 content: decryptedContent,
                 timestamp: messageObj.timestamp,
                 sent: false
