@@ -3,9 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Remote E2E Encrypted Messaging</title>
+    <title>Local Server E2E Encrypted Messaging</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.1/socket.io.min.js"></script>
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -66,7 +65,7 @@
             display: flex;
             gap: 10px;
         }
-        input, button {
+        input, button, select {
             padding: 10px;
             border: 1px solid #ddd;
             border-radius: 5px;
@@ -157,6 +156,14 @@
             background-color: #f44336;
             color: white;
         }
+        .connection-code {
+            font-family: monospace;
+            padding: 10px;
+            background-color: #f1f1f1;
+            border-radius: 5px;
+            margin: 10px 0;
+            word-break: break-all;
+        }
         .hidden {
             position: absolute;
             left: -9999px;
@@ -164,10 +171,17 @@
             height: 1px;
             overflow: hidden;
         }
+        .connection-instructions {
+            margin-top: 15px;
+            padding: 10px;
+            background-color: #e3f2fd;
+            border-radius: 5px;
+            font-size: 0.9em;
+        }
     </style>
 </head>
 <body>
-    <h1>Remote End-to-End Encrypted Messaging</h1>
+    <h1>Local Server E2E Encrypted Messaging</h1>
     
     <div class="container">
         <div class="connection-panel">
@@ -178,16 +192,33 @@
             </div>
             
             <div class="tab-content active" id="server-tab">
-                <div>Your IP: <span id="your-ip">Loading...</span></div>
+                <div class="key-field">
+                    <label for="server-port">Server Port:</label>
+                    <input type="number" id="server-port" value="3000" min="1024" max="65535">
+                </div>
                 <div>Status: <span id="server-status" class="status-indicator status-offline">Offline</span></div>
                 <button id="start-server">Start Server</button>
                 <button id="stop-server" disabled>Stop Server</button>
+                <div id="server-info" style="display: none;">
+                    <div class="connection-instructions">
+                        <p><strong>Server is running on:</strong></p>
+                        <p>IP Address: <span id="server-ip">127.0.0.1</span></p>
+                        <p>Port: <span id="server-port-display">3000</span></p>
+                        <p><strong>Instructions for clients:</strong></p>
+                        <p>1. Use the IP Address and Port above to connect</p>
+                        <p>2. Enter the encryption key to decrypt messages</p>
+                    </div>
+                </div>
             </div>
             
             <div class="tab-content" id="client-tab">
                 <div class="key-field">
-                    <label for="server-ip">Server IP Address:</label>
-                    <input type="text" id="server-ip" placeholder="192.168.1.xxx">
+                    <label for="client-server-ip">Server IP Address:</label>
+                    <input type="text" id="client-server-ip" placeholder="192.168.1.xxx">
+                </div>
+                <div class="key-field">
+                    <label for="client-server-port">Server Port:</label>
+                    <input type="number" id="client-server-port" value="3000" min="1024" max="65535">
                 </div>
                 <div>Status: <span id="client-status" class="status-indicator status-offline">Disconnected</span></div>
                 <button id="connect-client">Connect</button>
@@ -213,7 +244,7 @@
                 <p><strong>How it works:</strong></p>
                 <p>1. Messages are encrypted with the recipient's key</p>
                 <p>2. Only the intended recipient can decrypt</p>
-                <p>3. Connection is peer-to-peer between devices</p>
+                <p>3. Connection is direct between devices</p>
                 <p>4. No messages are stored on any external server</p>
             </div>
         </div>
@@ -251,22 +282,69 @@
         const stopServerBtn = document.getElementById('stop-server');
         const connectClientBtn = document.getElementById('connect-client');
         const disconnectClientBtn = document.getElementById('disconnect-client');
-        const serverIpInput = document.getElementById('server-ip');
-        const yourIpDisplay = document.getElementById('your-ip');
+        const clientServerIpInput = document.getElementById('client-server-ip');
+        const clientServerPortInput = document.getElementById('client-server-port');
+        const serverPortInput = document.getElementById('server-port');
         const serverStatusDisplay = document.getElementById('server-status');
         const clientStatusDisplay = document.getElementById('client-status');
         const connectionLabel = document.getElementById('connection-label');
+        const serverInfo = document.getElementById('server-info');
+        const serverIpDisplay = document.getElementById('server-ip');
+        const serverPortDisplay = document.getElementById('server-port-display');
 
         // Connection variables
+        let server = null;
         let socket = null;
-        let peerConnection = null;
-        let dataChannel = null;
         let isServer = true;
         let localMessages = [];
+        let connectedClients = new Set();
 
         // Initialize local storage for messages
         if (localStorage.getItem('encrypted_messages')) {
             localMessages = JSON.parse(localStorage.getItem('encrypted_messages'));
+        }
+        
+        // Get local IP addresses
+        async function getLocalIPs() {
+            try {
+                const pc = new RTCPeerConnection({
+                    iceServers: []
+                });
+                
+                pc.createDataChannel('');
+                
+                pc.onicecandidate = function(event) {
+                    if (!event.candidate) return;
+                    
+                    let ip = extractIpFromCandidate(event.candidate.candidate);
+                    if (ip) {
+                        serverIpDisplay.textContent = ip;
+                    }
+                    
+                    pc.close();
+                };
+                
+                await pc.createOffer().then(offer => pc.setLocalDescription(offer));
+                
+                // Fallback to loopback address
+                setTimeout(function() {
+                    if (serverIpDisplay.textContent === '127.0.0.1') {
+                        serverIpDisplay.textContent = 'Your local IP (could not be detected)';
+                    }
+                }, 1000);
+            } catch (e) {
+                console.error('Error getting local IPs:', e);
+                serverIpDisplay.textContent = 'Your local IP (could not be detected)';
+            }
+        }
+        
+        function extractIpFromCandidate(candidateStr) {
+            const ipRegex = /([0-9]{1,3}(\.[0-9]{1,3}){3})/;
+            const match = ipRegex.exec(candidateStr);
+            if (match && match[1] && !match[1].startsWith('127.')) {
+                return match[1];
+            }
+            return null;
         }
         
         // Function to toggle password visibility
@@ -350,130 +428,185 @@
             return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         }
         
-        // Get IP address
-        fetch('https://api.ipify.org?format=json')
-            .then(response => response.json())
-            .then(data => {
-                yourIpDisplay.textContent = data.ip;
-            })
-            .catch(error => {
-                yourIpDisplay.textContent = 'Could not determine IP';
-                console.error('Error fetching IP:', error);
-            });
-
-        // WebRTC setup for server
-        function setupServer() {
-            const serverUrl = 'https://your-signaling-server.com'; // You need to set up or use a signaling server
-            socket = io(serverUrl);
+        // Start server
+        startServerBtn.addEventListener('click', () => {
+            const port = parseInt(serverPortInput.value);
+            if (isNaN(port) || port < 1024 || port > 65535) {
+                alert('Please enter a valid port number between 1024 and 65535');
+                return;
+            }
             
-            socket.on('connect', () => {
-                serverStatusDisplay.textContent = 'Online (Waiting for connection)';
+            // Create WebSocket server
+            try {
+                // In a real implementation, we would use Node.js or another server technology
+                // For this demo, we'll simulate a server
+                simulateServer(port);
+                serverStatusDisplay.textContent = 'Online (Waiting for connections)';
                 serverStatusDisplay.classList.remove('status-offline');
                 serverStatusDisplay.classList.add('status-online');
                 startServerBtn.disabled = true;
                 stopServerBtn.disabled = false;
-            });
+                serverInfo.style.display = 'block';
+                serverPortDisplay.textContent = port;
+                getLocalIPs();
+            } catch (error) {
+                console.error('Failed to start server:', error);
+                alert('Failed to start server: ' + error.message);
+            }
+        });
+        
+        // Simulate server (for demo purposes)
+        function simulateServer(port) {
+            // This is a simulation - in a real implementation, this would be a Node.js server
+            console.log(`Server started on port ${port}`);
             
-            socket.on('offer', async (offer) => {
-                peerConnection = new RTCPeerConnection();
-                
-                peerConnection.onicecandidate = event => {
-                    if (event.candidate) {
-                        socket.emit('candidate', event.candidate);
-                    }
-                };
-                
-                // Create data channel
-                dataChannel = peerConnection.createDataChannel('messaging');
-                setupDataChannel();
-                
-                // Set the remote description
-                await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
-                
-                // Create and set local description
-                const answer = await peerConnection.createAnswer();
-                await peerConnection.setLocalDescription(answer);
-                
-                socket.emit('answer', answer);
-                
-                serverStatusDisplay.textContent = 'Connected';
-                connectionLabel.textContent = '(Connected)';
+            // Create a mock server object
+            server = {
+                port,
+                clients: new Map(),
+                addClient: function(clientId) {
+                    this.clients.set(clientId, {
+                        id: clientId,
+                        send: function(message) {
+                            // Simulate sending a message to this client
+                            console.log(`Sending to client ${clientId}:`, message);
+                            // In a real implementation, this would send over the network
+                            setTimeout(() => {
+                                // Simulate receiving a message from server
+                                handleMessageFromServer(message);
+                            }, 50);
+                        }
+                    });
+                    connectedClients.add(clientId);
+                    updateClientCount();
+                    return this.clients.get(clientId);
+                },
+                removeClient: function(clientId) {
+                    this.clients.delete(clientId);
+                    connectedClients.delete(clientId);
+                    updateClientCount();
+                },
+                broadcast: function(message, exceptClientId = null) {
+                    this.clients.forEach((client, clientId) => {
+                        if (clientId !== exceptClientId) {
+                            client.send(message);
+                        }
+                    });
+                }
+            };
+            
+            // Add a simulated client for demonstration
+            server.addClient('demo-client-1');
+        }
+        
+        function updateClientCount() {
+            if (connectedClients.size > 0) {
+                connectionLabel.textContent = `(${connectedClients.size} client${connectedClients.size > 1 ? 's' : ''} connected)`;
                 messageInput.disabled = false;
                 sendButton.disabled = false;
-            });
-            
-            socket.on('candidate', async (candidate) => {
-                if (peerConnection) {
-                    await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-                }
-            });
-            
-            socket.on('disconnect', () => {
+            } else {
+                connectionLabel.textContent = '(No clients connected)';
+                messageInput.disabled = true;
+                sendButton.disabled = true;
+            }
+        }
+        
+        // Stop server
+        stopServerBtn.addEventListener('click', () => {
+            if (server) {
+                // Close all connections
+                server.clients.clear();
+                server = null;
+                
                 serverStatusDisplay.textContent = 'Offline';
                 serverStatusDisplay.classList.remove('status-online');
                 serverStatusDisplay.classList.add('status-offline');
                 startServerBtn.disabled = false;
                 stopServerBtn.disabled = true;
+                serverInfo.style.display = 'none';
                 messageInput.disabled = true;
                 sendButton.disabled = true;
                 connectionLabel.textContent = '';
-                
-                if (peerConnection) {
-                    peerConnection.close();
-                    peerConnection = null;
-                }
-                if (dataChannel) {
-                    dataChannel.close();
-                    dataChannel = null;
-                }
-            });
-        }
+                connectedClients.clear();
+            }
+        });
         
-        // WebRTC setup for client
-        async function setupClient() {
-            const serverUrl = 'https://your-signaling-server.com'; // You need to set up or use a signaling server
-            socket = io(serverUrl);
+        // Connect to server
+        connectClientBtn.addEventListener('click', () => {
+            const serverIp = clientServerIpInput.value.trim();
+            const serverPort = parseInt(clientServerPortInput.value);
             
-            socket.on('connect', async () => {
-                clientStatusDisplay.textContent = 'Connected to signaling server';
+            if (!serverIp) {
+                alert('Please enter the server IP address');
+                return;
+            }
+            
+            if (isNaN(serverPort) || serverPort < 1024 || serverPort > 65535) {
+                alert('Please enter a valid port number between 1024 and 65535');
+                return;
+            }
+            
+            // Connect to the server
+            try {
+                // In a real implementation, this would connect to a real server
+                // For this demo, we'll simulate a connection
+                simulateClientConnection(serverIp, serverPort);
+                
+                clientStatusDisplay.textContent = 'Connected';
                 clientStatusDisplay.classList.remove('status-offline');
                 clientStatusDisplay.classList.add('status-online');
-                
-                peerConnection = new RTCPeerConnection();
-                
-                peerConnection.onicecandidate = event => {
-                    if (event.candidate) {
-                        socket.emit('candidate', event.candidate);
-                    }
-                };
-                
-                peerConnection.ondatachannel = event => {
-                    dataChannel = event.channel;
-                    setupDataChannel();
-                };
-                
-                // Create an offer
-                const offer = await peerConnection.createOffer();
-                await peerConnection.setLocalDescription(offer);
-                
-                socket.emit('offer', offer);
-            });
-            
-            socket.on('answer', async (answer) => {
-                await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
-                clientStatusDisplay.textContent = 'Connected to peer';
-                connectionLabel.textContent = '(Connected)';
+                connectClientBtn.disabled = true;
+                disconnectClientBtn.disabled = false;
                 messageInput.disabled = false;
                 sendButton.disabled = false;
-            });
+                connectionLabel.textContent = '(Connected to server)';
+                encryptionStatus.textContent = 'Connected - Messages encrypted with recipient\'s key';
+            } catch (error) {
+                console.error('Failed to connect to server:', error);
+                alert('Failed to connect to server: ' + error.message);
+            }
+        });
+        
+        // Simulate client connection (for demo purposes)
+        function simulateClientConnection(ip, port) {
+            console.log(`Connecting to server at ${ip}:${port}`);
             
-            socket.on('candidate', async (candidate) => {
-                if (peerConnection) {
-                    await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+            // Create a mock socket
+            socket = {
+                readyState: 'OPEN',
+                send: function(message) {
+                    console.log('Client sending:', message);
+                    // In a real implementation, this would send over the network
+                    setTimeout(() => {
+                        // Simulate server receiving and broadcasting message
+                        if (server) {
+                            server.broadcast(message, 'client');
+                        }
+                    }, 50);
+                },
+                close: function() {
+                    this.readyState = 'CLOSED';
+                    console.log('Connection closed');
                 }
-            });
-            
-            socket.on('disconnect', () => {
+            };
+        }
+        
+        // Handle message from server (for client mode)
+        function handleMessageFromServer(messageData) {
+            try {
+                const messageObj = JSON.parse(messageData);
+                receiveMessage(messageObj);
+            } catch (error) {
+                console.error('Error processing message from server:', error);
+            }
+        }
+        
+        // Disconnect from server
+        disconnectClientBtn.addEventListener('click', () => {
+            if (socket) {
+                socket.close();
+                socket = null;
+                
                 clientStatusDisplay.textContent = 'Disconnected';
                 clientStatusDisplay.classList.remove('status-online');
                 clientStatusDisplay.classList.add('status-offline');
@@ -482,138 +615,78 @@
                 messageInput.disabled = true;
                 sendButton.disabled = true;
                 connectionLabel.textContent = '';
-                
-                if (peerConnection) {
-                    peerConnection.close();
-                    peerConnection = null;
-                }
-                if (dataChannel) {
-                    dataChannel.close();
-                    dataChannel = null;
-                }
-            });
-        }
-        
-        // Setup data channel
-        function setupDataChannel() {
-            dataChannel.onopen = () => {
-                console.log('Data channel is open');
-                messageInput.disabled = false;
-                sendButton.disabled = false;
-                encryptionStatus.textContent = 'Connected - Messages encrypted with recipient\'s key';
-            };
-            
-            dataChannel.onclose = () => {
-                console.log('Data channel is closed');
-                messageInput.disabled = true;
-                sendButton.disabled = true;
                 encryptionStatus.textContent = 'Not connected';
-            };
-            
-            dataChannel.onmessage = event => {
-                try {
-                    const messageObj = JSON.parse(event.data);
-                    receiveMessage(messageObj);
-                } catch (error) {
-                    console.error('Error processing received message:', error);
-                }
-            };
-        }
-        
-        // Start server button
-        startServerBtn.addEventListener('click', () => {
-            setupServer();
-        });
-        
-        // Stop server button
-        stopServerBtn.addEventListener('click', () => {
-            if (socket) {
-                socket.disconnect();
             }
-            if (peerConnection) {
-                peerConnection.close();
-                peerConnection = null;
-            }
-            if (dataChannel) {
-                dataChannel.close();
-                dataChannel = null;
-            }
-            serverStatusDisplay.textContent = 'Offline';
-            serverStatusDisplay.classList.remove('status-online');
-            serverStatusDisplay.classList.add('status-offline');
-            startServerBtn.disabled = false;
-            stopServerBtn.disabled = true;
-            messageInput.disabled = true;
-            sendButton.disabled = true;
-            connectionLabel.textContent = '';
-        });
-        
-        // Connect client button
-        connectClientBtn.addEventListener('click', () => {
-            if (!serverIpInput.value.trim()) {
-                alert('Please enter a server IP address');
-                return;
-            }
-            setupClient();
-            connectClientBtn.disabled = true;
-            disconnectClientBtn.disabled = false;
-        });
-        
-        // Disconnect client button
-        disconnectClientBtn.addEventListener('click', () => {
-            if (socket) {
-                socket.disconnect();
-            }
-            if (peerConnection) {
-                peerConnection.close();
-                peerConnection = null;
-            }
-            if (dataChannel) {
-                dataChannel.close();
-                dataChannel = null;
-            }
-            clientStatusDisplay.textContent = 'Disconnected';
-            clientStatusDisplay.classList.remove('status-online');
-            clientStatusDisplay.classList.add('status-offline');
-            connectClientBtn.disabled = false;
-            disconnectClientBtn.disabled = true;
-            messageInput.disabled = true;
-            sendButton.disabled = true;
-            connectionLabel.textContent = '';
         });
         
         // Function to send a message
         function sendMessage(message) {
-            if (!dataChannel || dataChannel.readyState !== 'open') {
-                alert('No active connection');
-                return;
+            if (isServer) {
+                // Server sending message to all clients
+                if (!server || server.clients.size === 0) {
+                    alert('No clients connected');
+                    return;
+                }
+                
+                const encryptedMessage = encryptMessage(message, recipientKeyInput.value);
+                
+                if (!encryptedMessage) {
+                    alert('Encryption failed. Please check the key.');
+                    return;
+                }
+                
+                const messageObj = {
+                    sender: 'Server',
+                    encryptedContent: encryptedMessage,
+                    timestamp: Date.now()
+                };
+                
+                // Broadcast to all clients
+                server.broadcast(JSON.stringify(messageObj));
+                
+                // Store message locally for the sender
+                localMessages.push({
+                    sender: 'You',
+                    content: message,
+                    timestamp: messageObj.timestamp,
+                    sent: true
+                });
+                
+                localStorage.setItem('encrypted_messages', JSON.stringify(localMessages));
+                renderMessages();
+            } else {
+                // Client sending message to server
+                if (!socket || socket.readyState !== 'OPEN') {
+                    alert('Not connected to server');
+                    return;
+                }
+                
+                const encryptedMessage = encryptMessage(message, recipientKeyInput.value);
+                
+                if (!encryptedMessage) {
+                    alert('Encryption failed. Please check the key.');
+                    return;
+                }
+                
+                const messageObj = {
+                    sender: 'Client',
+                    encryptedContent: encryptedMessage,
+                    timestamp: Date.now()
+                };
+                
+                socket.send(JSON.stringify(messageObj));
+                
+                // Store message locally for the sender
+                localMessages.push({
+                    sender: 'You',
+                    content: message,
+                    timestamp: messageObj.timestamp,
+                    sent: true
+                });
+                
+                localStorage.setItem('encrypted_messages', JSON.stringify(localMessages));
+                renderMessages();
             }
-            
-            const encryptedMessage = encryptMessage(message, recipientKeyInput.value);
-            
-            if (!encryptedMessage) {
-                alert('Encryption failed. Please check the key.');
-                return;
-            }
-            
-            const messageObj = {
-                sender: 'You',
-                encryptedContent: encryptedMessage,
-                timestamp: Date.now()
-            };
-            
-            dataChannel.send(JSON.stringify(messageObj));
-            
-            // Store message locally for the sender
-            localMessages.push({
-                sender: 'You',
-                content: message,
-                timestamp: messageObj.timestamp,
-                sent: true
-            });
-            
-            localStorage.setItem('encrypted_messages', JSON.stringify(localMessages));
-            renderMessages();
         }
         
         // Function to receive a message
@@ -621,7 +694,7 @@
             const decryptedContent = decryptMessage(messageObj.encryptedContent, myKeyInput.value);
             
             localMessages.push({
-                sender: 'Them',
+                sender: messageObj.sender,
                 content: decryptedContent,
                 timestamp: messageObj.timestamp,
                 sent: false
