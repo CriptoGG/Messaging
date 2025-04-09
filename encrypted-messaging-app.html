@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Remote E2E Encrypted Messaging</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.1/socket.io.min.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            height: 80vh;
+        }
+        .chat-container {
+            flex: 1;
+            background-color: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+        h2 {
+            margin-top: 0;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #eee;
+            color: #555;
+        }
+        .messages {
+            flex-grow: 1;
+            overflow-y: auto;
+            margin-bottom: 15px;
+            padding: 10px;
+            background-color: #f9f9f9;
+            border-radius: 5px;
+        }
+        .message {
+            margin-bottom: 12px;
+            padding: 10px;
+            border-radius: 5px;
+            max-width: 70%;
+            word-break: break-word;
+        }
+        .message.sent {
+            background-color: #e3f2fd;
+            align-self: flex-end;
+            margin-left: auto;
+        }
+        .message.received {
+            background-color: #f1f1f1;
+        }
+        .message-form {
+            display: flex;
+            gap: 10px;
+        }
+        input, button {
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        input {
+            flex-grow: 1;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        button:hover {
+            background-color: #3e8e41;
+        }
+        .key-container {
+            background-color: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+        }
+        .key-field {
+            margin-bottom: 15px;
+        }
+        .encryption-info {
+            background-color: #fffde7;
+            padding: 15px;
+            border-radius: 5px;
+            margin-top: 20px;
+            font-size: 0.9em;
+        }
+        .timestamp {
+            font-size: 0.7em;
+            color: #888;
+            margin-top: 5px;
+        }
+        .clear-button {
+            background-color: #f44336;
+            margin-top: 10px;
+        }
+        .encryption-status {
+            font-size: 0.8em;
+            color: #888;
+            font-style: italic;
+            margin-top: 5px;
+        }
+        .connection-panel {
+            background-color: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .tabs {
+            display: flex;
+            margin-bottom: 15px;
+        }
+        .tab {
+            padding: 10px 20px;
+            background-color: #eee;
+            cursor: pointer;
+            border-radius: 5px 5px 0 0;
+        }
+        .tab.active {
+            background-color: #4CAF50;
+            color: white;
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        .status-indicator {
+            padding: 5px 10px;
+            border-radius: 15px;
+            font-size: 0.8em;
+            display: inline-block;
+            margin-left: 10px;
+        }
+        .status-online {
+            background-color: #4CAF50;
+            color: white;
+        }
+        .status-offline {
+            background-color: #f44336;
+            color: white;
+        }
+        .hidden {
+            position: absolute;
+            left: -9999px;
+            width: 1px;
+            height: 1px;
+            overflow: hidden;
+        }
+    </style>
+</head>
+<body>
+    <h1>Remote End-to-End Encrypted Messaging</h1>
+    
+    <div class="container">
+        <div class="connection-panel">
+            <h2>Connection Settings</h2>
+            <div class="tabs">
+                <div class="tab active" data-tab="server">Act as Server</div>
+                <div class="tab" data-tab="client">Connect to Server</div>
+            </div>
+            
+            <div class="tab-content active" id="server-tab">
+                <div>Your IP: <span id="your-ip">Loading...</span></div>
+                <div>Status: <span id="server-status" class="status-indicator status-offline">Offline</span></div>
+                <button id="start-server">Start Server</button>
+                <button id="stop-server" disabled>Stop Server</button>
+            </div>
+            
+            <div class="tab-content" id="client-tab">
+                <div class="key-field">
+                    <label for="server-ip">Server IP Address:</label>
+                    <input type="text" id="server-ip" placeholder="192.168.1.xxx">
+                </div>
+                <div>Status: <span id="client-status" class="status-indicator status-offline">Disconnected</span></div>
+                <button id="connect-client">Connect</button>
+                <button id="disconnect-client" disabled>Disconnect</button>
+            </div>
+        </div>
+
+        <div class="key-container">
+            <h2>Encryption Keys</h2>
+            <div class="key-field">
+                <label for="my-key">Your Secret Key:</label>
+                <input type="password" id="my-key" value="yourSecretKey123">
+                <button id="toggle-key-visibility">Show</button>
+            </div>
+            <div class="key-field">
+                <label for="recipient-key">Recipient's Secret Key:</label>
+                <input type="password" id="recipient-key" value="recipientSecretKey456">
+                <button id="toggle-recipient-key-visibility">Show</button>
+            </div>
+            <button id="generate-keys">Generate New Random Keys</button>
+            
+            <div class="encryption-info">
+                <p><strong>How it works:</strong></p>
+                <p>1. Messages are encrypted with the recipient's key</p>
+                <p>2. Only the intended recipient can decrypt</p>
+                <p>3. Connection is peer-to-peer between devices</p>
+                <p>4. No messages are stored on any external server</p>
+            </div>
+        </div>
+        
+        <div class="chat-container">
+            <h2>Messages <span id="connection-label"></span></h2>
+            <div class="messages" id="messages"></div>
+            <div class="encryption-status" id="encryption-status">Not connected</div>
+            <form class="message-form" id="message-form">
+                <input type="text" id="message-input" placeholder="Type a message..." disabled>
+                <button type="submit" disabled id="send-button">Send</button>
+            </form>
+            <button class="clear-button" id="clear-messages">Clear Messages</button>
+        </div>
+    </div>
+
+    <script>
+        // DOM elements
+        const messagesContainer = document.getElementById('messages');
+        const messageForm = document.getElementById('message-form');
+        const messageInput = document.getElementById('message-input');
+        const sendButton = document.getElementById('send-button');
+        const myKeyInput = document.getElementById('my-key');
+        const recipientKeyInput = document.getElementById('recipient-key');
+        const generateKeysBtn = document.getElementById('generate-keys');
+        const clearMessagesBtn = document.getElementById('clear-messages');
+        const encryptionStatus = document.getElementById('encryption-status');
+        const toggleKeyVisibilityBtn = document.getElementById('toggle-key-visibility');
+        const toggleRecipientKeyVisibilityBtn = document.getElementById('toggle-recipient-key-visibility');
+        const tabs = document.querySelectorAll('.tab');
+        const tabContents = document.querySelectorAll('.tab-content');
+        const serverTab = document.getElementById('server-tab');
+        const clientTab = document.getElementById('client-tab');
+        const startServerBtn = document.getElementById('start-server');
+        const stopServerBtn = document.getElementById('stop-server');
+        const connectClientBtn = document.getElementById('connect-client');
+        const disconnectClientBtn = document.getElementById('disconnect-client');
+        const serverIpInput = document.getElementById('server-ip');
+        const yourIpDisplay = document.getElementById('your-ip');
+        const serverStatusDisplay = document.getElementById('server-status');
+        const clientStatusDisplay = document.getElementById('client-status');
+        const connectionLabel = document.getElementById('connection-label');
+
+        // Connection variables
+        let socket = null;
+        let peerConnection = null;
+        let dataChannel = null;
+        let isServer = true;
+        let localMessages = [];
+
+        // Initialize local storage for messages
+        if (localStorage.getItem('encrypted_messages')) {
+            localMessages = JSON.parse(localStorage.getItem('encrypted_messages'));
+        }
+        
+        // Function to toggle password visibility
+        function togglePasswordVisibility(inputElement, buttonElement) {
+            if (inputElement.type === 'password') {
+                inputElement.type = 'text';
+                buttonElement.textContent = 'Hide';
+            } else {
+                inputElement.type = 'password';
+                buttonElement.textContent = 'Show';
+            }
+        }
+        
+        // Event listeners for toggle buttons
+        toggleKeyVisibilityBtn.addEventListener('click', () => {
+            togglePasswordVisibility(myKeyInput, toggleKeyVisibilityBtn);
+        });
+        
+        toggleRecipientKeyVisibilityBtn.addEventListener('click', () => {
+            togglePasswordVisibility(recipientKeyInput, toggleRecipientKeyVisibilityBtn);
+        });
+        
+        // Tab functionality
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                // Deactivate all tabs
+                tabs.forEach(t => t.classList.remove('active'));
+                tabContents.forEach(tc => tc.classList.remove('active'));
+                
+                // Activate clicked tab
+                tab.classList.add('active');
+                const tabName = tab.getAttribute('data-tab');
+                document.getElementById(`${tabName}-tab`).classList.add('active');
+                
+                // Set mode
+                isServer = tabName === 'server';
+            });
+        });
+
+        // Function to generate a random key
+        function generateRandomKey(length = 16) {
+            const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+            let key = '';
+            for (let i = 0; i < length; i++) {
+                key += chars.charAt(Math.floor(Math.random() * chars.length));
+            }
+            return key;
+        }
+        
+        // Generate new keys button
+        generateKeysBtn.addEventListener('click', () => {
+            myKeyInput.value = generateRandomKey();
+            recipientKeyInput.value = generateRandomKey();
+            alert('New keys generated! Previous messages cannot be decrypted with these keys.');
+        });
+        
+        // Function to encrypt a message
+        function encryptMessage(message, key) {
+            try {
+                return CryptoJS.AES.encrypt(message, key).toString();
+            } catch (error) {
+                console.error('Encryption error:', error);
+                return null;
+            }
+        }
+        
+        // Function to decrypt a message
+        function decryptMessage(ciphertext, key) {
+            try {
+                const bytes = CryptoJS.AES.decrypt(ciphertext, key);
+                return bytes.toString(CryptoJS.enc.Utf8);
+            } catch (error) {
+                console.error('Decryption error:', error);
+                return '[Unable to decrypt message]';
+            }
+        }
+        
+        // Function to format timestamp
+        function formatTime(timestamp) {
+            const date = new Date(timestamp);
+            return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        }
+        
+        // Get IP address
+        fetch('https://api.ipify.org?format=json')
+            .then(response => response.json())
+            .then(data => {
+                yourIpDisplay.textContent = data.ip;
+            })
+            .catch(error => {
+                yourIpDisplay.textContent = 'Could not determine IP';
+                console.error('Error fetching IP:', error);
+            });
+
+        // WebRTC setup for server
+        function setupServer() {
+            const serverUrl = 'https://your-signaling-server.com'; // You need to set up or use a signaling server
+            socket = io(serverUrl);
+            
+            socket.on('connect', () => {
+                serverStatusDisplay.textContent = 'Online (Waiting for connection)';
+                serverStatusDisplay.classList.remove('status-offline');
+                serverStatusDisplay.classList.add('status-online');
+                startServerBtn.disabled = true;
+                stopServerBtn.disabled = false;
+            });
+            
+            socket.on('offer', async (offer) => {
+                peerConnection = new RTCPeerConnection();
+                
+                peerConnection.onicecandidate = event => {
+                    if (event.candidate) {
+                        socket.emit('candidate', event.candidate);
+                    }
+                };
+                
+                // Create data channel
+                dataChannel = peerConnection.createDataChannel('messaging');
+                setupDataChannel();
+                
+                // Set the remote description
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+                
+                // Create and set local description
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+                
+                socket.emit('answer', answer);
+                
+                serverStatusDisplay.textContent = 'Connected';
+                connectionLabel.textContent = '(Connected)';
+                messageInput.disabled = false;
+                sendButton.disabled = false;
+            });
+            
+            socket.on('candidate', async (candidate) => {
+                if (peerConnection) {
+                    await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+                }
+            });
+            
+            socket.on('disconnect', () => {
+                serverStatusDisplay.textContent = 'Offline';
+                serverStatusDisplay.classList.remove('status-online');
+                serverStatusDisplay.classList.add('status-offline');
+                startServerBtn.disabled = false;
+                stopServerBtn.disabled = true;
+                messageInput.disabled = true;
+                sendButton.disabled = true;
+                connectionLabel.textContent = '';
+                
+                if (peerConnection) {
+                    peerConnection.close();
+                    peerConnection = null;
+                }
+                if (dataChannel) {
+                    dataChannel.close();
+                    dataChannel = null;
+                }
+            });
+        }
+        
+        // WebRTC setup for client
+        async function setupClient() {
+            const serverUrl = 'https://your-signaling-server.com'; // You need to set up or use a signaling server
+            socket = io(serverUrl);
+            
+            socket.on('connect', async () => {
+                clientStatusDisplay.textContent = 'Connected to signaling server';
+                clientStatusDisplay.classList.remove('status-offline');
+                clientStatusDisplay.classList.add('status-online');
+                
+                peerConnection = new RTCPeerConnection();
+                
+                peerConnection.onicecandidate = event => {
+                    if (event.candidate) {
+                        socket.emit('candidate', event.candidate);
+                    }
+                };
+                
+                peerConnection.ondatachannel = event => {
+                    dataChannel = event.channel;
+                    setupDataChannel();
+                };
+                
+                // Create an offer
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+                
+                socket.emit('offer', offer);
+            });
+            
+            socket.on('answer', async (answer) => {
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+                clientStatusDisplay.textContent = 'Connected to peer';
+                connectionLabel.textContent = '(Connected)';
+                messageInput.disabled = false;
+                sendButton.disabled = false;
+            });
+            
+            socket.on('candidate', async (candidate) => {
+                if (peerConnection) {
+                    await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+                }
+            });
+            
+            socket.on('disconnect', () => {
+                clientStatusDisplay.textContent = 'Disconnected';
+                clientStatusDisplay.classList.remove('status-online');
+                clientStatusDisplay.classList.add('status-offline');
+                connectClientBtn.disabled = false;
+                disconnectClientBtn.disabled = true;
+                messageInput.disabled = true;
+                sendButton.disabled = true;
+                connectionLabel.textContent = '';
+                
+                if (peerConnection) {
+                    peerConnection.close();
+                    peerConnection = null;
+                }
+                if (dataChannel) {
+                    dataChannel.close();
+                    dataChannel = null;
+                }
+            });
+        }
+        
+        // Setup data channel
+        function setupDataChannel() {
+            dataChannel.onopen = () => {
+                console.log('Data channel is open');
+                messageInput.disabled = false;
+                sendButton.disabled = false;
+                encryptionStatus.textContent = 'Connected - Messages encrypted with recipient\'s key';
+            };
+            
+            dataChannel.onclose = () => {
+                console.log('Data channel is closed');
+                messageInput.disabled = true;
+                sendButton.disabled = true;
+                encryptionStatus.textContent = 'Not connected';
+            };
+            
+            dataChannel.onmessage = event => {
+                try {
+                    const messageObj = JSON.parse(event.data);
+                    receiveMessage(messageObj);
+                } catch (error) {
+                    console.error('Error processing received message:', error);
+                }
+            };
+        }
+        
+        // Start server button
+        startServerBtn.addEventListener('click', () => {
+            setupServer();
+        });
+        
+        // Stop server button
+        stopServerBtn.addEventListener('click', () => {
+            if (socket) {
+                socket.disconnect();
+            }
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
+            if (dataChannel) {
+                dataChannel.close();
+                dataChannel = null;
+            }
+            serverStatusDisplay.textContent = 'Offline';
+            serverStatusDisplay.classList.remove('status-online');
+            serverStatusDisplay.classList.add('status-offline');
+            startServerBtn.disabled = false;
+            stopServerBtn.disabled = true;
+            messageInput.disabled = true;
+            sendButton.disabled = true;
+            connectionLabel.textContent = '';
+        });
+        
+        // Connect client button
+        connectClientBtn.addEventListener('click', () => {
+            if (!serverIpInput.value.trim()) {
+                alert('Please enter a server IP address');
+                return;
+            }
+            setupClient();
+            connectClientBtn.disabled = true;
+            disconnectClientBtn.disabled = false;
+        });
+        
+        // Disconnect client button
+        disconnectClientBtn.addEventListener('click', () => {
+            if (socket) {
+                socket.disconnect();
+            }
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
+            if (dataChannel) {
+                dataChannel.close();
+                dataChannel = null;
+            }
+            clientStatusDisplay.textContent = 'Disconnected';
+            clientStatusDisplay.classList.remove('status-online');
+            clientStatusDisplay.classList.add('status-offline');
+            connectClientBtn.disabled = false;
+            disconnectClientBtn.disabled = true;
+            messageInput.disabled = true;
+            sendButton.disabled = true;
+            connectionLabel.textContent = '';
+        });
+        
+        // Function to send a message
+        function sendMessage(message) {
+            if (!dataChannel || dataChannel.readyState !== 'open') {
+                alert('No active connection');
+                return;
+            }
+            
+            const encryptedMessage = encryptMessage(message, recipientKeyInput.value);
+            
+            if (!encryptedMessage) {
+                alert('Encryption failed. Please check the key.');
+                return;
+            }
+            
+            const messageObj = {
+                sender: 'You',
+                encryptedContent: encryptedMessage,
+                timestamp: Date.now()
+            };
+            
+            dataChannel.send(JSON.stringify(messageObj));
+            
+            // Store message locally for the sender
+            localMessages.push({
+                sender: 'You',
+                content: message,
+                timestamp: messageObj.timestamp,
+                sent: true
+            });
+            
+            localStorage.setItem('encrypted_messages', JSON.stringify(localMessages));
+            renderMessages();
+        }
+        
+        // Function to receive a message
+        function receiveMessage(messageObj) {
+            const decryptedContent = decryptMessage(messageObj.encryptedContent, myKeyInput.value);
+            
+            localMessages.push({
+                sender: 'Them',
+                content: decryptedContent,
+                timestamp: messageObj.timestamp,
+                sent: false
+            });
+            
+            localStorage.setItem('encrypted_messages', JSON.stringify(localMessages));
+            renderMessages();
+        }
+        
+        // Function to render messages
+        function renderMessages() {
+            messagesContainer.innerHTML = '';
+            
+            localMessages.forEach(msg => {
+                const msgTime = formatTime(msg.timestamp);
+                
+                const messageElement = document.createElement('div');
+                messageElement.classList.add('message');
+                
+                if (msg.sent) {
+                    messageElement.classList.add('sent');
+                } else {
+                    messageElement.classList.add('received');
+                }
+                
+                messageElement.innerHTML = `
+                    <div>${msg.sender}: ${msg.content}</div>
+                    <div class="timestamp">${msgTime}</div>
+                `;
+                
+                messagesContainer.appendChild(messageElement);
+            });
+            
+            // Scroll to bottom
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+        
+        // Event listener for message form
+        messageForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const message = messageInput.value.trim();
+            if (message) {
+                sendMessage(message);
+                messageInput.value = '';
+            }
+        });
+        
+        // Event listener for clear messages button
+        clearMessagesBtn.addEventListener('click', () => {
+            if (confirm('Clear all messages?')) {
+                localMessages = [];
+                localStorage.removeItem('encrypted_messages');
+                renderMessages();
+            }
+        });
+        
+        // Initial render
+        renderMessages();
+    </script>
+</body>
+</html>
